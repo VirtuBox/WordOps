@@ -725,6 +725,12 @@ wo_uninstall() {
     rm -rf /usr/local/lib/python3.*/dist-packages/{pystache-*,cement-2.*,wo-*} /usr/local/bin/wo /etc/bash_completion.d/wo_auto.rc /var/lib/wo /etc/wo /usr/lib/wo/templates >> /var/log/wo/install.log 2>&1
 }
 
+wo_cheat_alias() {
+    if ! grep -q "cheat" "$HOME/.bashrc"; then
+        echo "alias cheat='/usr/local/bin/cht.sh'" >> "$HOME/.bashrc"
+    fi
+}
+
 wo_ufw_setup() {
 
     # get custom ssh port
@@ -790,14 +796,6 @@ wo_ufw_setup() {
 } \
     >> $wo_install_log
 
-wo_cheat_install() {
-    curl -sL https://cht.sh/:cht.sh > /usr/local/bin/cht.sh
-    curl -sL https://cheat.sh/:bash_completion > /etc/bash_completion.d/cht.sh
-    if ! grep -q "cheat" $HOME/.bashrc; then
-        echo "alias cheat='/usr/local/bin/cht.sh'" >> "$HOME/.bashrc"
-    fi
-}
-
 ###
 # 4 - WO MAIN SETUP
 ###
@@ -811,11 +809,11 @@ if [ "$wo_purge" = "y" ]; then
 else
     # 1 - WO already installed
     if [ -x /usr/local/bin/wo ]; then
-        if [ -z "$wo_force_install" ]; then
-            if { wo -v 2>&1 | grep -q "$wo_version_new"; }; then
-                wo_lib_error "You already have WordOps $wo_version_new"
-                exit 1
-            fi
+        if {
+            wo -v 2>&1 | grep -q "$wo_version_new"
+        } && [ -z "$wo_force_install" ]; then
+            wo_lib_error "You already have WordOps $wo_version_new"
+            exit 1
         fi
         wo_lib_echo "Installing wo dependencies " | tee -ai $wo_install_log
         wo_install_dep | tee -ai $wo_install_log
@@ -960,7 +958,7 @@ else
         wo_lib_echo_info "wo stack upgrade --nginx"
         echo
         wo_lib_echo "To update other packages use the command:"
-        wo_lib_echo_info "wo maintenance"
+        wo_lib_echo_info "wo stack maintenance"
     else
         wo_lib_echo "WordOps (wo) installed successfully"
         echo

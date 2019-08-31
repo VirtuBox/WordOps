@@ -15,6 +15,14 @@ exit_script() {
     exit 1
 }
 
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get -qq purge mysql* graphviz* redis*
+apt-get -qq autoremove --purge
+sudo apt-get install --assume-yes --quiet git python3-setuptools python3-dev python3-apt ccze tree
+echo -e "[user]\n\tname = abc\n\temail = root@localhost.com" > "$HOME/.gitconfig"
+sudo bash install --travis -b "updating-configurations"
+
 echo -e "${CGREEN}#############################################${CEND}"
 echo -e '       stack install             '
 echo -e "${CGREEN}#############################################${CEND}"
