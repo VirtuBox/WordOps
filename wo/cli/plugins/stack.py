@@ -1,27 +1,25 @@
 """Stack Plugin for WordOps"""
 
-from cement.core.controller import CementBaseController, expose
-from cement.core import handler, hook
-
 import codecs
 import configparser
 import os
 import pwd
 import random
+import re
 import shutil
 import string
-import re
+
 import requests
 
 import psutil
-
-# from pynginxconfig import NginxConfig
+from cement.core import handler, hook
+from cement.core.controller import CementBaseController, expose
 from wo.cli.plugins.site_functions import *
 from wo.cli.plugins.sitedb import *
 from wo.cli.plugins.stack_migrate import WOStackMigrateController
+from wo.cli.plugins.stack_pref import post_pref, pre_pref
 from wo.cli.plugins.stack_services import WOStackStatusController
 from wo.cli.plugins.stack_upgrade import WOStackUpgradeController
-from wo.cli.plugins.stack_pref import pre_pref, post_pref
 from wo.core.apt_repo import WORepo
 from wo.core.aptget import WOAptGet
 from wo.core.cron import WOCron
@@ -33,6 +31,7 @@ from wo.core.logging import Log
 from wo.core.mysql import WOMysql
 from wo.core.services import WOService
 from wo.core.shellexec import CommandExecutionError, WOShellExec
+from wo.core.template import WOTemplate
 from wo.core.variables import WOVariables
 
 
@@ -88,6 +87,8 @@ class WOStackController(CementBaseController):
                 dict(help='Install Fail2ban stack', action='store_true')),
             (['--clamav'],
                 dict(help='Install ClamAV stack', action='store_true')),
+            (['--sendmail'],
+                dict(help='Install Sendmail stack', action='store_true')),
             (['--utils'],
                 dict(help='Install Utils stack', action='store_true')),
             (['--redis'],
@@ -126,7 +127,7 @@ class WOStackController(CementBaseController):
                 (not pargs.adminer) and (not pargs.utils) and
                 (not pargs.redis) and (not pargs.proftpd) and
                 (not pargs.extplorer) and (not pargs.clamav) and
-                (not pargs.phpredisadmin) and
+                (not pargs.phpredisadmin) and (not pargs.sendmail) and
                     (not pargs.php73)):
                 pargs.web = True
                 pargs.admin = True
@@ -145,8 +146,10 @@ class WOStackController(CementBaseController):
                 pargs.php = True
                 pargs.mysql = True
                 pargs.wpcli = True
+                pargs.sendmail = True
 
             if pargs.admin:
+                pargs.web = True
                 pargs.adminer = True
                 pargs.phpmyadmin = True
                 pargs.composer = True
@@ -185,9 +188,10 @@ class WOStackController(CementBaseController):
 
             # Redis
             if pargs.redis:
+                pargs.php = True
                 if not WOAptGet.is_installed(self, 'redis-server'):
                     apt_packages = apt_packages + WOVariables.wo_redis
-                    pargs.php = True
+
                 else:
                     Log.info(self, "Redis already installed")
 
@@ -196,8 +200,8 @@ class WOStackController(CementBaseController):
                 Log.debug(self, "Setting apt_packages variable for PHP 7.2")
                 if not (WOAptGet.is_installed(self, 'php7.2-fpm')):
                     if not (WOAptGet.is_installed(self, 'php7.3-fpm')):
-                        apt_packages = apt_packages + WOVariables.wo_php + \
-                            WOVariables.wo_php_extra
+                        apt_packages = (apt_packages + WOVariables.wo_php +
+                                        WOVariables.wo_php_extra)
                     else:
                         apt_packages = apt_packages + WOVariables.wo_php
                 else:
@@ -209,8 +213,9 @@ class WOStackController(CementBaseController):
                 Log.debug(self, "Setting apt_packages variable for PHP 7.3")
                 if not WOAptGet.is_installed(self, 'php7.3-fpm'):
                     if not (WOAptGet.is_installed(self, 'php7.2-fpm')):
-                        apt_packages = apt_packages + WOVariables.wo_php + \
-                            WOVariables.wo_php73 + WOVariables.wo_php_extra
+                        apt_packages = (apt_packages + WOVariables.wo_php +
+                                        WOVariables.wo_php73 +
+                                        WOVariables.wo_php_extra)
                     else:
                         apt_packages = apt_packages + WOVariables.wo_php73
                 else:
@@ -240,8 +245,8 @@ class WOStackController(CementBaseController):
             # WP-CLI
             if pargs.wpcli:
                 Log.debug(self, "Setting packages variable for WP-CLI")
-                if (not os.path.isfile("/usr/local/bin/wp") and not
-                        os.path.isfile("/usr/bin/wp")):
+                if ((not os.path.isfile("/usr/local/bin/wp")) and
+                        (not os.path.isfile("/usr/bin/wp"))):
                     packages = packages + [["https://github.com/wp-cli/wp-cli/"
                                             "releases/download/v{0}/"
                                             "wp-cli-{0}.phar"
@@ -265,10 +270,19 @@ class WOStackController(CementBaseController):
             if pargs.clamav:
                 Log.debug(self, "Setting apt_packages variable for ClamAV")
                 if not WOAptGet.is_installed(self, 'clamav'):
-                    apt_packages = apt_packages + ["clamav"]
+                    apt_packages = apt_packages + WOVariables.wo_clamav
                 else:
                     Log.debug(self, "ClamAV already installed")
                     Log.info(self, "ClamAV already installed")
+
+            # sendmail
+            if pargs.sendmail:
+                Log.debug(self, "Setting apt_packages variable for Sendmail")
+                if not WOAptGet.is_installed(self, 'sendmail'):
+                    apt_packages = apt_packages + ["sendmail"]
+                else:
+                    Log.debug(self, "Sendmail already installed")
+                    Log.info(self, "Sendmail already installed")
 
             # proftpd
             if pargs.proftpd:
@@ -312,6 +326,9 @@ class WOStackController(CementBaseController):
 
             # Composer
             if pargs.composer:
+                if ((not WOAptGet.is_installed(self, 'php7.2-fpm')) and
+                        (not WOAptGet.is_installed(self, 'php7.3-fpm'))):
+                    pargs.php = True
                 if not os.path.isfile('/usr/local/bin/composer'):
                     Log.debug(self, "Setting packages variable for Composer ")
                     packages = packages + [["https://getcomposer.org/"
@@ -400,7 +417,7 @@ class WOStackController(CementBaseController):
                     Log.info(self, "WordOps dashboard already installed")
 
             # eXtplorer
-            if pargs.explorer:
+            if pargs.extplorer:
                 if not os.path.isdir('/var/www/22222/htdocs/files'):
                     Log.debug(self, "Setting packages variable for eXtplorer")
                     packages = packages + \
@@ -502,7 +519,7 @@ class WOStackController(CementBaseController):
                 (not pargs.adminer) and (not pargs.utils) and
                 (not pargs.redis) and (not pargs.proftpd) and
                 (not pargs.extplorer) and (not pargs.clamav) and
-                (not pargs.phpredisadmin) and
+                (not pargs.phpredisadmin) and (not pargs.sendmail) and
                 (not pargs.php73)):
             pargs.web = True
             pargs.admin = True
@@ -523,6 +540,7 @@ class WOStackController(CementBaseController):
             pargs.php = True
             pargs.mysql = True
             pargs.wpcli = True
+            pargs.sendmail = True
 
         if pargs.admin:
             pargs.composer = True
@@ -587,7 +605,13 @@ class WOStackController(CementBaseController):
         if pargs.clamav:
             Log.debug(self, "Setting apt_packages variable for ClamAV")
             if WOAptGet.is_installed(self, 'clamav'):
-                apt_packages = apt_packages + ["clamav"]
+                apt_packages = apt_packages + WOVariables.wo_clamav
+
+        # sendmail
+        if pargs.sendmail:
+            Log.debug(self, "Setting apt_packages variable for Sendmail")
+            if WOAptGet.is_installed(self, 'sendmail'):
+                apt_packages = apt_packages + ["sendmail"]
 
         # proftpd
         if pargs.proftpd:
@@ -644,7 +668,7 @@ class WOStackController(CementBaseController):
         if pargs.netdata:
             Log.debug(self, "Removing Netdata")
             if os.path.isfile('/opt/netdata/usr/'
-                              'libexec/netdata-uninstaller.sh'):
+                              'libexec/netdata/netdata-uninstaller.sh'):
                 packages = packages + ['/var/lib/wo/tmp/kickstart.sh']
 
         if pargs.dashboard:
@@ -667,17 +691,22 @@ class WOStackController(CementBaseController):
             if (set(["nginx-custom"]).issubset(set(apt_packages))):
                 WOService.stop_service(self, 'nginx')
 
+            if (set(WOVariables.wo_mysql).issubset(set(apt_packages))):
+                WOMysql.backupAll(self)
+                WOService.stop_service(self, 'mysql')
+
             # Netdata uninstaller
             if (set(['/var/lib/wo/tmp/'
                      'kickstart.sh']).issubset(set(packages))):
                 if WOVariables.wo_distro == 'Raspbian':
                     WOShellExec.cmd_exec(self, "bash /usr/"
-                                         "libexec/netdata-"
-                                         "uninstaller.sh -y -f")
+                                         "libexec/netdata/"
+                                         "netdata-uninstaller.sh -y -f")
                 else:
                     WOShellExec.cmd_exec(self, "bash /opt/netdata/usr/"
-                                         "libexec/netdata-"
-                                         "uninstaller.sh -y -f")
+                                         "libexec/netdata/"
+                                         "netdata-uninstaller.sh - y - f",
+                                         errormsg='', log=False)
 
             if (packages):
                 Log.info(self, "Removing packages, please wait...")
@@ -708,7 +737,7 @@ class WOStackController(CementBaseController):
                 (not pargs.adminer) and (not pargs.utils) and
                 (not pargs.redis) and (not pargs.proftpd) and
                 (not pargs.extplorer) and (not pargs.clamav) and
-                (not pargs.phpredisadmin) and
+                (not pargs.phpredisadmin) and (not pargs.sendmail) and
                 (not pargs.php73)):
             pargs.web = True
             pargs.admin = True
@@ -729,6 +758,7 @@ class WOStackController(CementBaseController):
             pargs.php = True
             pargs.mysql = True
             pargs.wpcli = True
+            pargs.sendmail = True
 
         if pargs.admin:
             pargs.utils = True
@@ -793,7 +823,13 @@ class WOStackController(CementBaseController):
         if pargs.clamav:
             Log.debug(self, "Setting apt_packages variable for ClamAV")
             if WOAptGet.is_installed(self, 'clamav'):
-                apt_packages = apt_packages + ["clamav"]
+                apt_packages = apt_packages + WOVariables.wo_clamav
+
+        # sendmail
+        if pargs.sendmail:
+            Log.debug(self, "Setting apt_packages variable for Sendmail")
+            if WOAptGet.is_installed(self, 'sendmail'):
+                apt_packages = apt_packages + ["sendmail"]
 
         # proftpd
         if pargs.proftpd:
@@ -853,7 +889,7 @@ class WOStackController(CementBaseController):
         if pargs.netdata:
             Log.debug(self, "Removing Netdata")
             if os.path.isfile('/opt/netdata/usr/'
-                              'libexec/netdata-uninstaller.sh'):
+                              'libexec/netdata/netdata-uninstaller.sh'):
                 packages = packages + ['/var/lib/wo/tmp/kickstart.sh']
 
         if pargs.dashboard:
@@ -880,16 +916,21 @@ class WOStackController(CementBaseController):
             if (set(["fail2ban"]).issubset(set(apt_packages))):
                 WOService.stop_service(self, 'fail2ban')
 
+            if (set(WOVariables.wo_mysql).issubset(set(apt_packages))):
+                WOMysql.backupAll(self)
+                WOService.stop_service(self, 'mysql')
+
             # Netdata uninstaller
             if (set(['/var/lib/wo/tmp/'
                      'kickstart.sh']).issubset(set(packages))):
                 if WOVariables.wo_distro == 'Raspbian':
                     WOShellExec.cmd_exec(self, "bash /usr/"
-                                         "libexec/netdata-"
-                                         "uninstaller.sh -y -f")
+                                         "libexec/netdata/netdata-"
+                                         "uninstaller.sh -y -f",
+                                         errormsg='', log=False)
                 else:
                     WOShellExec.cmd_exec(self, "bash /opt/netdata/usr/"
-                                         "libexec/netdata-"
+                                         "libexec/netdata/netdata-"
                                          "uninstaller.sh -y -f")
 
             if (apt_packages):

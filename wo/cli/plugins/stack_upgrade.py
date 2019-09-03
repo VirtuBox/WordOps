@@ -1,8 +1,9 @@
 import os
 import shutil
 
-from cement.core.controller import CementBaseController, expose
 from cement.core import handler, hook
+from cement.core.controller import CementBaseController, expose
+from wo.cli.plugins.stack_pref import post_pref, pre_pref
 from wo.core.aptget import WOAptGet
 from wo.core.download import WODownload
 from wo.core.extract import WOExtract
@@ -11,7 +12,6 @@ from wo.core.logging import Log
 from wo.core.services import WOService
 from wo.core.shellexec import WOShellExec
 from wo.core.variables import WOVariables
-from wo.cli.plugins.stack_pref import pre_pref, post_pref
 
 
 class WOStackUpgradeController(CementBaseController):
@@ -62,7 +62,6 @@ class WOStackUpgradeController(CementBaseController):
         apt_packages = []
         packages = []
         nginx_packages = []
-        empty_packages = []
         self.msg = []
         pargs = self.app.pargs
 
@@ -96,7 +95,6 @@ class WOStackUpgradeController(CementBaseController):
 
         if pargs.nginx:
             if WOAptGet.is_installed(self, 'nginx-custom'):
-                apt_packages = apt_packages + WOVariables.wo_nginx
                 nginx_packages = nginx_packages + WOVariables.wo_nginx
             else:
                 Log.info(self, "Nginx Stable is not already installed")
@@ -145,7 +143,8 @@ class WOStackUpgradeController(CementBaseController):
                 Log.info(self, "WPCLI is not installed with WordOps")
 
         if pargs.netdata:
-            if os.path.isdir('/opt/netdata'):
+            if (os.path.isdir('/opt/netdata') or
+                    os.path.isdir('/etc/netdata')):
                 packages = packages + [['https://my-netdata.io/'
                                         'kickstart-static64.sh',
                                         '/var/lib/wo/tmp/kickstart.sh',
@@ -190,8 +189,8 @@ class WOStackUpgradeController(CementBaseController):
                     if start_upgrade != "Y" and start_upgrade != "y":
                         Log.error(self, "Not starting package update")
                 Log.info(self, "Updating APT packages, please wait...")
-                if set(WOVariables.wo_nginx).issubset(set(apt_packages)):
-                    pre_pref(self, ["nginx-custom", "nginx-wo"])
+
+                pre_pref(self, nginx_packages)
                 # apt-get update
                 WOAptGet.update(self)
                 if set(WOVariables.wo_php).issubset(set(apt_packages)):
@@ -201,8 +200,13 @@ class WOStackUpgradeController(CementBaseController):
                     WOAptGet.remove(self, ['php7.3-fpm'],
                                     auto=False, purge=True)
                 # Update packages
+                if not os.path.isfile(
+                            '/etc/apt/preferences.d/nginx-block'):
+                    WOAptGet.install(self, nginx_packages)
+
                 WOAptGet.install(self, apt_packages)
-                post_pref(self, apt_packages, empty_packages, True)
+                post_pref(self, nginx_packages, [], True)
+                post_pref(self, apt_packages, [], True)
                 # Post Actions after package updates
 
             if len(packages):
@@ -223,9 +227,16 @@ class WOStackUpgradeController(CementBaseController):
 
                 if pargs.netdata:
                     Log.info(self, "Upgrading Netdata, please wait...")
-                    WOShellExec.cmd_exec(self, "/bin/bash /var/lib/wo/tmp/"
-                                         "kickstart.sh "
-                                         "--dont-wait")
+                    if os.path.isdir('/opt/netdata'):
+                        WOShellExec.cmd_exec(
+                            self, "bash /opt/netdata/usr/"
+                            "libexec/netdata/netdata-"
+                            "updater.sh")
+                    elif os.path.isdir('/etc/netdata'):
+                        WOShellExec.cmd_exec(
+                            self, "bash /usr/"
+                            "libexec/netdata/netdata-"
+                            "updater.sh")
 
                 if pargs.dashboard:
                     Log.debug(self, "Extracting wo-dashboard.tar.gz "

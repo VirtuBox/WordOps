@@ -48,14 +48,13 @@ class WOShellExec():
         try:
             subprocess.call(['sensible-editor', filepath])
         except OSError as e:
-                Log.debug(self, "{0}{1}".format(e.errno, e.strerror))
-                raise CommandExecutionError
+            Log.debug(self, "{0}{1}".format(e.errno, e.strerror))
+            raise CommandExecutionError
 
     def cmd_exec_stdout(self, command, errormsg='', log=True):
         """Run shell command from Python"""
         try:
             log and Log.debug(self, "Running command: {0}".format(command))
-
             with subprocess.Popen([command], stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, shell=True) as proc:
                 (cmd_stdout_bytes, cmd_stderr_bytes) = proc.communicate()
@@ -73,8 +72,8 @@ class WOShellExec():
                                 .format(cmd_stdout, cmd_stderr))
                 return cmd_stdout
         except OSError as e:
-                Log.debug(self, str(e))
-                raise CommandExecutionError
+            Log.debug(self, str(e))
+            raise CommandExecutionError
         except Exception as e:
-                Log.debug(self, str(e))
-                raise CommandExecutionError
+            Log.debug(self, str(e))
+            raise CommandExecutionError
